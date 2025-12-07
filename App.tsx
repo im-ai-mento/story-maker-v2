@@ -721,33 +721,6 @@ const App: React.FC = () => {
                 }
             }
 
-            // 재시도하지 않아야 할 에러들
-            const shouldNotRetry = rawMessage.includes('safety') || 
-                                   rawMessage.includes('blocked') || 
-                                   rawMessage.includes('invalid api key') ||
-                                   rawMessage.includes('401') ||
-                                   rawMessage.includes('403') ||
-                                   rawMessage.includes('bad request') ||
-                                   rawMessage.includes('400');
-            
-            if (shouldNotRetry) {
-                console.error("Non-retryable error detected:", rawMessage);
-                let userMessage = "생성을 실패하였습니다.";
-                
-                if (rawMessage.includes("safety") || rawMessage.includes("blocked") || rawMessage.includes("filter")) {
-                    userMessage = "안전 필터에 의해 차단되었습니다. 프롬프트를 수정해주세요.";
-                } else if (rawMessage.includes("invalid") || rawMessage.includes("401") || rawMessage.includes("403")) {
-                    userMessage = "API 키가 유효하지 않거나 권한이 없습니다. API 키를 확인해주세요.";
-                } else if (rawMessage.includes("400") || rawMessage.includes("bad request")) {
-                    userMessage = "잘못된 요청입니다. 프롬프트나 이미지를 확인해주세요.";
-                }
-                
-                setErrorMessage(`${userMessage} (자세한 내용은 브라우저 콘솔을 확인하세요)`);
-                setIsLoading(false);
-                setLoadingMessage(null);
-                return;
-            }
-            
             if (attempt < maxRetries) {
                 const isTimeout = rawMessage.includes('503') || rawMessage.includes('timed out');
                 const message = isTimeout 
@@ -759,24 +732,7 @@ const App: React.FC = () => {
                 await new Promise(resolve => setTimeout(resolve, delay));
             } else {
                 console.error("Image generation/editing failed after all retries.");
-                console.error("Final error details:", error);
-                
-                // 더 구체적인 에러 메시지 제공
-                let userMessage = "생성을 실패하였습니다.";
-                
-                if (rawMessage.includes("safety") || rawMessage.includes("blocked") || rawMessage.includes("filter")) {
-                    userMessage = "안전 필터에 의해 차단되었습니다. 프롬프트를 수정해주세요.";
-                } else if (rawMessage.includes("invalid") || rawMessage.includes("401") || rawMessage.includes("403")) {
-                    userMessage = "API 키가 유효하지 않거나 권한이 없습니다. API 키를 확인해주세요.";
-                } else if (rawMessage.includes("400") || rawMessage.includes("bad request")) {
-                    userMessage = "잘못된 요청입니다. 프롬프트나 이미지를 확인해주세요.";
-                } else if (rawMessage.includes("no image") || rawMessage.includes("no image generated")) {
-                    userMessage = "이미지가 생성되지 않았습니다. 프롬프트를 변경하거나 다른 모델을 시도해주세요.";
-                } else if (rawMessage.includes("timeout") || rawMessage.includes("503")) {
-                    userMessage = "서버 응답이 지연되었습니다. 잠시 후 다시 시도해주세요.";
-                }
-                
-                setErrorMessage(`${userMessage} (자세한 내용은 브라우저 콘솔을 확인하세요)`);
+                setErrorMessage("생성을 실패하였습니다. 잠시 후 다시 시도해주세요. (오류가 지속되면 콘솔을 확인하세요)");
                 setIsLoading(false);
                 setLoadingMessage(null);
             }
@@ -1230,7 +1186,7 @@ const App: React.FC = () => {
     const minX = Math.min(...allSelectedObjects.map(obj => obj.x));
     const minY = Math.min(...allSelectedObjects.map(obj => obj.y));
     const maxX = Math.max(...allSelectedObjects.map(obj => obj.x + obj.width));
-    const maxY = Math.max(...allSelectedObjects.map(obj => obj.y + ((obj as any).height ?? 0)));
+    const maxY = Math.max(...allSelectedObjects.map(obj => obj.y + (obj as any).height ?? 0));
     
     const captureWidth = maxX - minX;
     const captureHeight = maxY - minY;

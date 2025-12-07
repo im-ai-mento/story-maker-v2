@@ -67,25 +67,8 @@ export const generateImage = async (
                     }
                 }
             }
-            
-            // 응답에 이미지가 없는 경우 상세 정보 로깅
-            const finishReason = candidate?.finishReason;
-            const safetyRatings = candidate?.safetyRatings;
-            
-            console.error("API response did not contain an image.");
-            console.error("Finish reason:", finishReason);
-            console.error("Safety ratings:", safetyRatings);
-            console.error("Full response:", JSON.stringify(response, null, 2));
-            
-            if (finishReason === 'SAFETY') {
-                throw new Error("Image generation was blocked by safety filters. Please modify your prompt.");
-            } else if (finishReason === 'RECITATION') {
-                throw new Error("Image generation was blocked due to content recitation concerns.");
-            } else if (finishReason === 'OTHER') {
-                throw new Error("Image generation failed for an unknown reason.");
-            }
-            
-            throw new Error("No image generated from Gemini model. Finish reason: " + (finishReason || "UNKNOWN"));
+             console.error("API response did not contain an image. Full response:", JSON.stringify(response, null, 2));
+             throw new Error("No image generated from Gemini model.");
 
         } else {
             const response = await ai.models.generateImages({
@@ -170,22 +153,8 @@ export const editImage = async (
             }
         }
         
-        // 편집 응답에 이미지가 없는 경우 상세 정보 로깅
-        const finishReason = candidate?.finishReason;
-        const safetyRatings = candidate?.safetyRatings;
-        
-        console.error("API response did not contain an edited image.");
-        console.error("Finish reason:", finishReason);
-        console.error("Safety ratings:", safetyRatings);
-        console.error("Full response:", JSON.stringify(response, null, 2));
-        
-        if (finishReason === 'SAFETY') {
-            throw new Error("Image editing was blocked by safety filters. Please modify your prompt or image.");
-        } else if (finishReason === 'RECITATION') {
-            throw new Error("Image editing was blocked due to content recitation concerns.");
-        }
-        
-        throw new Error("No edited image was returned from the API. Finish reason: " + (finishReason || "UNKNOWN"));
+        console.error("API response did not contain an image or was blocked. Full response:", JSON.stringify(response, null, 2));
+        throw new Error("No edited image was returned from the API. This might be due to safety filters.");
 
     } catch (error) {
         console.error("Error calling Gemini API for image editing:", error);
