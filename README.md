@@ -2,19 +2,95 @@
 <img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
 </div>
 
-# Run and deploy your AI Studio app
+# Story Maker v2
 
-This contains everything you need to run your app locally.
+AI-powered story and image creation tool using Google Gemini API.
 
 View your app in AI Studio: https://ai.studio/apps/drive/1mCLVuTdLOOzzyVQ6n1lurIIhlicfFCPE
 
-## Run Locally
+## 🚀 Quick Start
 
-**Prerequisites:**  Node.js
+### Option 1: GitHub Codespaces (Recommended for GitHub)
 
+1. **Open in Codespaces:**
+   - Go to your repository: https://github.com/im-ai-mento/story-maker-v2
+   - Click the green **"Code"** button
+   - Select **"Codespaces"** tab
+   - Click **"Create codespace on main"**
+   - Wait for the environment to set up (about 1-2 minutes)
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+2. **In the Codespace terminal, run:**
+   ```bash
+   npm install
+   npm run dev
+   ```
+
+3. **Access the app:**
+   - Codespaces will automatically show a popup with the URL
+   - Or click the "Ports" tab and open the forwarded port (usually 3000)
+   - The app will be available at `https://[your-codespace].github.dev`
+
+### Option 2: Run Locally
+
+**Prerequisites:** Node.js 18+ installed
+
+1. **Clone the repository:**
+   ```bash
+   git clone https://github.com/im-ai-mento/story-maker-v2.git
+   cd story-maker-v2
+   ```
+
+2. **Install dependencies:**
+   ```bash
+   npm install
+   ```
+
+3. **Set up API Key (Optional):**
+   - Create a `.env.local` file in the root directory
+   - Add your Gemini API key:
+     ```
+     GEMINI_API_KEY=your_api_key_here
+     ```
+   - Or enter it directly in the app (click the key icon in the top right)
+
+4. **Run the development server:**
+   ```bash
+   npm run dev
+   ```
+
+5. **Open your browser:**
+   - Navigate to `http://localhost:3000`
+
+## 📝 Getting Your API Key
+
+1. Visit [Google AI Studio](https://aistudio.google.com/app/apikey)
+2. Sign in with your Google account
+3. Click **"Create API Key"**
+4. Copy the key and paste it in the app or `.env.local` file
+
+## 🛠️ Available Scripts
+
+- `npm run dev` - Start development server
+- `npm run build` - Build for production
+- `npm run preview` - Preview production build
+
+## 📦 Features
+
+- ✨ AI Image Generation & Editing
+- 🎨 Infinite Canvas with Layers
+- 🖼️ Image Inpainting & Outpainting
+- 📝 Text Objects
+- 🎬 Video Generation (Veo)
+- 👤 Character Management
+- 💾 Project Save/Load (.story files)
+
+## 🔧 Tech Stack
+
+- React 18 + TypeScript
+- Vite
+- Google Gemini API
+- Tailwind CSS
+
+## 📄 License
+
+This project is private.
