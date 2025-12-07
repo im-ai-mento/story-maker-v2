@@ -1,0 +1,5 @@
+{
+  "name": "Story Maker",
+  "description": "A creative workspace for generating and editing visual stories using Google Gemini models.",
+  "requestFramePermissions": []
+}
