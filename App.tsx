@@ -1186,7 +1186,7 @@ const App: React.FC = () => {
     const minX = Math.min(...allSelectedObjects.map(obj => obj.x));
     const minY = Math.min(...allSelectedObjects.map(obj => obj.y));
     const maxX = Math.max(...allSelectedObjects.map(obj => obj.x + obj.width));
-    const maxY = Math.max(...allSelectedObjects.map(obj => obj.y + (obj as any).height ?? 0));
+    const maxY = Math.max(...allSelectedObjects.map(obj => obj.y + ((obj as any).height ?? 0)));
     
     const captureWidth = maxX - minX;
     const captureHeight = maxY - minY;
