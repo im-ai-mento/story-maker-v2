@@ -68,6 +68,41 @@ View your app in AI Studio: https://ai.studio/apps/drive/1mCLVuTdLOOzzyVQ6n1lurI
 3. Click **"Create API Key"**
 4. Copy the key and paste it in the app or `.env.local` file
 
+## 🌐 Web Deployment
+
+### GitHub Pages (자동 배포)
+
+이 저장소는 GitHub Actions를 통해 자동으로 GitHub Pages에 배포됩니다.
+
+1. **자동 배포:**
+   - `main` 브랜치에 푸시하면 자동으로 빌드 및 배포됩니다
+   - Actions 탭에서 배포 상태를 확인할 수 있습니다
+
+2. **배포 활성화:**
+   - 저장소 Settings → Pages로 이동
+   - Source를 "GitHub Actions"로 설정
+   - 배포가 완료되면 다음 URL에서 접속 가능:
+     ```
+     https://im-ai-mento.github.io/story-maker-v2/
+     ```
+
+3. **수동 배포:**
+   - Actions 탭 → "Deploy to GitHub Pages" 워크플로우 선택
+   - "Run workflow" 버튼 클릭
+
+### 다른 호스팅 서비스
+
+**Vercel:**
+```bash
+npm install -g vercel
+vercel
+```
+
+**Netlify:**
+- Netlify에 저장소 연결
+- Build command: `npm run build`
+- Publish directory: `dist`
+
 ## 🛠️ Available Scripts
 
 - `npm run dev` - Start development server
