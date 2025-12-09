@@ -1,3 +1,4 @@
+
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { GoogleGenAI } from '@google/genai';
 import html2canvas from 'html2canvas';
@@ -24,9 +25,68 @@ const parseDataUrl = (dataUrl: string): { mimeType: string; data: string } => {
     const parts = dataUrl.split(',');
     if (parts.length < 2) return { mimeType: 'image/png', data: '' };
     const mimeMatch = parts[0].match(/:(.*?);/);
-    const mimeType = mimeMatch ? mimeMatch[1] : 'image/png';
+    let mimeType = mimeMatch ? mimeMatch[1] : 'image/png';
+    
+    // Fix for "Unsupported MIME type: application/octet-stream"
+    // Default to image/png if octet-stream is detected, as the API rejects it.
+    if (mimeType === 'application/octet-stream' || mimeType === 'binary/octet-stream') {
+        mimeType = 'image/png';
+    }
+
     const data = parts[1];
     return { mimeType, data };
+};
+
+// FIX: Direct Resize to User's Standard (1376px)
+// User Feedback: "Why upscale if it saves at 768x1376?"
+// We adhere strictly to 1376px max dimension. No step-down, no fancy logic.
+// Just standard resizing to match the model's native output range.
+const optimizeImageForApi = (base64Str: string, maxWidth = 1376, quality = 0.95): Promise<{ mimeType: string, data: string }> => {
+    return new Promise((resolve) => {
+        const img = new Image();
+        img.src = base64Str;
+        img.onload = () => {
+            let width = img.naturalWidth;
+            let height = img.naturalHeight;
+
+            // Simple resize logic: strictly cap at maxWidth (1376px)
+            // If the image is smaller (e.g. 768x1376), it won't be touched.
+            if (width > maxWidth || height > maxWidth) {
+                if (width > height) {
+                    height *= maxWidth / width;
+                    width = maxWidth;
+                } else {
+                    width *= maxWidth / height;
+                    height = maxWidth;
+                }
+            } else {
+                // No resizing needed, return original
+                resolve(parseDataUrl(base64Str));
+                return;
+            }
+
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            
+            if (ctx) {
+                // Standard smoothing is best for 1:1 matching
+                ctx.imageSmoothingEnabled = true;
+                ctx.imageSmoothingQuality = 'medium'; 
+                ctx.drawImage(img, 0, 0, width, height);
+                
+                // Use JPEG 0.95 - Efficient, high quality, no bloat.
+                const optimizedDataUrl = canvas.toDataURL('image/jpeg', quality);
+                resolve(parseDataUrl(optimizedDataUrl));
+            } else {
+                resolve(parseDataUrl(base64Str));
+            }
+        };
+        img.onerror = () => {
+            resolve(parseDataUrl(base64Str));
+        };
+    });
 };
 
 const createPaddedImage = (
@@ -44,16 +104,15 @@ const createPaddedImage = (
             let canvasHeight: number;
 
             if (imageRatio > targetRatio) {
-                // Image is wider than target, so match width and add padding top/bottom
                 canvasWidth = img.naturalWidth;
                 canvasHeight = img.naturalWidth / targetRatio;
             } else {
-                // Image is narrower than or equal to target, so match height and add padding left/right
                 canvasHeight = img.naturalHeight;
                 canvasWidth = img.naturalHeight * targetRatio;
             }
 
-            const MAX_DIMENSION = 1024;
+            // Sync with optimizeImageForApi limit (1376px)
+            const MAX_DIMENSION = 1376;
             let scaleFactor = 1;
             if (canvasWidth > MAX_DIMENSION || canvasHeight > MAX_DIMENSION) {
               scaleFactor = Math.min(MAX_DIMENSION / canvasWidth, MAX_DIMENSION / canvasHeight);
@@ -75,6 +134,9 @@ const createPaddedImage = (
 
             ctx.fillStyle = '#00ff00'; // Lime green for outpainting mask
             ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
 
             const dx = (canvas.width - finalImgWidth) / 2;
             const dy = (canvas.height - finalImgHeight) / 2;
@@ -146,89 +208,103 @@ const Tools: React.FC<ToolsProps> = ({ activeTool, setActiveTool, onNew, onSave,
   );
 };
 
+// REVISED: Safe Prompts to avoid PROHIBITED_CONTENT triggers
 const promptAssetData = [
   {
     name: "애니메이션 실사화",
     type: "single",
-    prompt: `You are an expert AI image generator specializing in hyper-realistic character translations. 이미지의 여성캐릭터를 코스프레한 예쁜 한국 아이돌 여성의 최고화질의 초고퀄리티 사진기로 찍은 클로즈업 샷으로 만들어줘. 노란색으로 가득채워진 배경의 Acting Area 촬영장에서 첨부 이미지의 인물과 비슷한 포즈를 취하고 있는 장면, 영화의 리얼함이 느껴지는 라이팅(촬영도구, 촬영조명 절대 안보임), 모델 촬영 느낌`,
-    negativePrompt: ``
+    prompt: `You are an expert digital artist specializing in cinematic adaptations. 
+Transform the character in the attached image into a hyper-realistic, high-definition photograph. 
+The subject should look like a real person (Korean idol style) in a movie scene. 
+Maintain the original pose and expression accurately. 
+Lighting should be cinematic and realistic. 
+Ensure skin texture and hair look natural and photorealistic.`,
+    negativePrompt: `anime, cartoon, illustration, drawing, 2d, sketch, painting, distorted, noise, aliasing, shimmering, blurry`
   },
   {
     name: "의상 착용",
     type: "dual",
-    prompt: `You are an expert AI image editor specializing in virtual try-ons. Your task is to take clothing from a source image and realistically place it on a character in a base image, preserving the character's identity and the scene.
+    prompt: `You are a professional fashion editor. Your task is to composite a fashion look.
 
-**EXECUTION LOGIC:**
-1.  **Analyze Image 1 (BASE IMAGE):** This is the primary image containing the character and the scene. The character's identity (face, body, pose) and the entire background/lighting MUST be preserved. The model will sort images by x-coordinate, so the leftmost image is Image 1.
-2.  **Analyze Image 2 (SOURCE IMAGE):** This image contains the clothing item to be worn. Your ONLY job for this image is to identify and extract the CLOTHING. This is the rightmost image.
-3.  **CRITICAL - IGNORE PERSON IN IMAGE 2:** If there is a person wearing the clothes in Image 2, you MUST COMPLETELY IGNORE their face, body, hair, and pose. They are just a mannequin. Do not transfer any of their features to the character in Image 1.
-4.  **Synthesize:** Realistically dress the character from Image 1 with the extracted clothing from Image 2. The fit must be natural for the character's body and pose.
-5.  **Final Check:** The output must be identical to Image 1 in every way (character's face, pose, background, lighting, with the single change being the character's new clothing.
+**INPUTS:**
+- Image 1 (Left): The fashion model / base character.
+- Image 2 (Right): The reference clothing item.
 
-**RULES:**
-- **Character Preservation:** The character's identity from Image 1 is non-negotiable and must be perfectly maintained.
-- **Clothing Only:** Image 2 is ONLY for sourcing the clothing.
-- **NO Feature Blending:** Do not blend or merge any physical features (face, body type, hair) from any person in Image 2 into Image 1.`
+**TASK:**
+Drape the clothing from Image 2 onto the model in Image 1. 
+- Ensure the fit is natural and tailored to the model's pose.
+- Maintain the model's original identity, face, and pose exactly as they are in Image 1.
+- Preserve the lighting and environment of Image 1.
+- Ignore the mannequin/person in Image 2; strictly transfer the fabric and design of the garment.
+
+**OUTPUT:**
+A high-quality, photorealistic fashion photograph.`
   },
   {
     name: "상품 들기",
     type: "dual",
-    prompt: `You are an expert AI image editor. Your task is to perform a precise product placement by taking a product from one image and having a character in another image hold it, without altering anything else.
+    prompt: `You are a professional product photographer and editor.
 
-**EXECUTION LOGIC:**
-1.  **Analyze Image 1 (BASE IMAGE):** This is the primary image. It contains the character, their clothing, their pose, and the background. EVERYTHING in this image must be preserved, except for the character's hand which might need to be adjusted to hold the product. The model will sort images by x-coordinate, so the leftmost image is Image 1.
-2.  **Analyze Image 2 (SOURCE IMAGE):** This is the source image. Your ONLY job for this image is to identify and extract the PRODUCT (e.g., a cosmetic tube, a phone, a bottle). This is the rightmost image.
-3.  **CRITICAL - IGNORE EVERYTHING ELSE IN IMAGE 2:** You MUST COMPLETELY IGNORE any person, clothing, background, or any other element in Image 2. These are irrelevant and must NOT influence the final result.
-4.  **Synthesize:** Place the extracted product from Image 2 into the hand of the character from Image 1. The integration must be hyper-realistic.
-5.  **Final Check:** The output must be identical to Image 1 in every way (character, face, pose, background, lighting, AND CLOTHING), with the single addition of the product being held.
+**INPUTS:**
+- Image 1 (Left): The lifestyle model / character.
+- Image 2 (Right): The product (e.g., bottle, phone, box).
 
-**RULES:**
-- **Source of Truth:** Image 1 is the absolute source of truth for the character, clothing, and scene.
-- **Product Only:** Image 2 is ONLY for sourcing the product.
-- **NO Blending:** Do not blend or merge any features from the person or background in Image 2 into Image 1.`
+**TASK:**
+Composite the product from Image 2 into the hand of the character in Image 1.
+- The product placement must look physically accurate (grip, lighting, shadows).
+- Maintain the character's face, clothing, and background from Image 1.
+- Only adjust the hand/fingers slightly if necessary to grip the object naturally.
+
+**OUTPUT:**
+A high-quality commercial lifestyle photograph.`
   },
   {
     name: "자세 따라하기",
     type: "dual",
-    prompt: `You are an expert AI image editor specializing in POSE TRANSFER.
-Your goal is to apply the *geometry* of Image 2 to the *character* of Image 1.
+    prompt: `You are an expert in pose transfer and character consistency.
 
-**CRITICAL INSTRUCTION - ABSTRACTION:**
-1. **Image 1 (Character Source):** This is the visual reality. Keep the character's face, hair, outfit, and style EXACTLY as they are.
-2. **Image 2 (Pose Source):** This is purely a GEOMETRIC REFERENCE.
-   - Imagine Image 2 is 배경을 흰색으로 변경후, 인물의 의상을 제거하고, 오로지 포즈만 정확히 파악해서 졸라맨 스타일의 심플한 짝대기로 보이게 해줘".
-   - If Image 2 is a drawing or sketch, interpret the lines as the bones of the skeleton.
+**INPUTS:**
+- Image 1 (Left): The Source Character (Reference for identity, face, clothes).
+- Image 2 (Right): The Target Pose (Reference for body language/geometry).
 
-**EXECUTION:**
-1. Image 2 의 배경을 흰색으로 변경후, 인물의 의상을 제거하고, 오로지 포즈만 정확히 파악해서 졸라맨 스타일의 심플한 짝대기로 보이게 해줘.
-2. Apply this pose to the character from Image 1.
-3. Render the character from Image 1 in the new pose, maintaining their original identity and clothing perfectly.`
+**TASK:**
+Generate a new image of the Character from Image 1 performing the Pose from Image 2.
+- The character's face, hairstyle, and outfit must match Image 1.
+- The character's body position and gesture must match Image 2.
+- If Image 2 is a sketch or stick figure, interpret it as the skeletal structure.
+
+**OUTPUT:**
+A photorealistic image of the character in the new pose.`
   },
   {
     name: "의상 추출",
     type: "single",
-    prompt: `You are an expert AI image editor. Your task is to perfectly isolate the clothing worn by the person in the attached image.
+    prompt: `You are a technical fashion archivist.
 
-**CRITICAL INSTRUCTIONS (MUST FOLLOW):**
-1.  **Identify Clothing:** Analyze the image and identify all pieces of clothing, including shirts, pants, dresses, jackets, hats, shoes, and accessories.
-2.  **Isolate and Extract:** Carefully cut out only the clothing items from the person and the background.
-3.  **Remove Person & Background:** The final output must NOT contain any part of the person (skin, hair, body) or the original background.
-4.  **White Background:** Place the extracted clothing items on a completely clean, solid white background (#FFFFFF). Arrange them neatly as if for a product catalog.
-5.  **Maintain Realism:** The clothing's texture, color, and details must be preserved perfectly. Do not alter the clothing itself.
+**TASK:**
+Isolate the clothing items from the attached image.
+- Create a "ghost mannequin" or "flat lay" style image of just the garments.
+- Remove the person, skin, and background entirely.
+- Place the clothing on a clean, pure white background.
+- Preserve all fabric details, textures, and colors accurately.
 
-**Final Output:** The final image should be the extracted clothing on a plain white background. Output ONLY the image file.`
+**OUTPUT:**
+A clean product catalog image of the clothing.`
   },
   {
     name: "오류 범위 해결",
     type: "single",
-    prompt: `You are an expert AI image editor specializing in OUTPAINTING.
-The attached image contains solid color blocks or borders (often green, blue, or black) that do not match the main photo.
+    prompt: `You are an expert photo restoration specialist.
+The attached image contains solid colored masks (green/blue/black blocks) at the edges.
 
-**INSTRUCTIONS:**
-1. **Identify Mask:** Treat any solid, unnatural color blocks at the edges as empty/masked areas.
-2. **Fill & Extend:** Generate new, matching visual content to replace these blocks. Extend the existing background and objects naturally.
-3. **No Borders:** The final output must be a seamless, full-frame image without any remaining solid color bars or frames.`,
-    negativePrompt: "solid color blocks, borders, frames, green bars, blue bars, glitch, distorted, watermark, text"
+**TASK:**
+Perform "Outpainting" to fill these masked areas.
+- Extend the scenery, background, and objects naturally into the masked regions.
+- Ensure seamless continuity of lighting and texture.
+- Remove any solid color borders.
+
+**OUTPUT:**
+A complete, full-frame photograph.`
   },
 ];
 
@@ -242,6 +318,7 @@ const App: React.FC = () => {
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [loadingMessage, setLoadingMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [detailedError, setDetailedError] = useState<string | null>(null);
   const [selectedImageIds, setSelectedImageIds] = useState<string[]>([]);
   const [selectedTextIds, setSelectedTextIds] = useState<string[]>([]);
   const [selectedDrawingCanvasIds, setSelectedDrawingCanvasIds] = useState<string[]>([]);
@@ -516,7 +593,7 @@ const App: React.FC = () => {
         let basePrompt = matchedAsset.prompt;
 
         if (assetName === "애니메이션 실사화" && activeModel === 'gemini-3-pro-image-preview') {
-            basePrompt = `A hyper realistic cinematic scene in [a background of attached image] of a beautiful Korean idol person in cosplay, actively performing a shoot, with no cameras, lighting equipment, stands, or any other filming gear visible. The scene is a pefect snapshot with natural lighting, capturing the performer in attached image's action, with realistic textures and environment. Remember: You should never appear as a two-headed or three-headed cartoon character or doll.`;
+            basePrompt = `Create a hyper-realistic cinematic portrait of a Korean idol. The scene is a perfect snapshot with natural lighting, realistic skin textures, and high detail. The subject should not look like a cartoon or doll.`;
         }
 
         finalPrompt = userText
@@ -532,9 +609,12 @@ const App: React.FC = () => {
     setIsLoading(true);
     setLoadingMessage(null);
     setErrorMessage(null);
+    setDetailedError(null);
     setDebugImages([]);
     
-    const maxRetries = 5; 
+    // REVISED: Limit to 3 retries to prevent "Infinite Loop" feeling.
+    // Pro 3 model failure is usually payload size or safety, not transient.
+    const maxRetries = 3; 
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
@@ -547,6 +627,19 @@ const App: React.FC = () => {
                 ...selectedImages.map(img => ({ ...img, type: 'image' })),
                 ...selectedCanvases.map(canvas => ({ ...canvas, src: canvas.drawingSrc, type: 'canvas' }))
             ].sort((a, b) => a.x - b.x); 
+
+            // IMPORTANT: If editing images (creating from reference), fallback to Gemini Pro 3
+            // because Imagen 4 (via generateImages) strictly does text-to-image generation, not editing.
+            let currentModel = activeModel;
+            // Force Imagen 4 for generation from scratch (no selected items) as per user request
+            if (editableItems.length === 0) {
+                currentModel = 'imagen-4.0-generate-001';
+            } else if (activeModel.includes('imagen') && editableItems.length > 0) {
+                // If editing (items selected) but active model is Imagen (if we had a button), fallback to Gemini.
+                // Since we don't have an Imagen button anymore, this is just a safety check.
+                console.log("Switching to Gemini 3 Pro for editing/inpainting task as Imagen is generation-only.");
+                currentModel = 'gemini-3-pro-image-preview';
+            }
 
             if (editableItems.length > 0) {
                 const isSingleItem = editableItems.length === 1;
@@ -562,14 +655,19 @@ const App: React.FC = () => {
                     }
                 }
 
-                const referenceImageData = editableItems.map(item => {
+                // OPTIMIZATION: Use 1376px JPEG 0.95 (Efficient & Sharp)
+                // 1. Matched to user's 768x1376 output requirement.
+                // 2. No weird upscaling.
+                const referenceImageData = await Promise.all(editableItems.map(async (item) => {
                     const src = item.src || ""; 
                     if (!src) return null;
-                    const { mimeType, data } = parseDataUrl(src);
-                    return { mimeType, base64Data: data };
-                }).filter(item => item !== null) as { mimeType: string; base64Data: string }[];
+                    const { data: optimizedBase64, mimeType: optimizedMimeType } = await optimizeImageForApi(src, 1376, 0.95);
+                    return { mimeType: optimizedMimeType, base64Data: optimizedBase64 };
+                }));
                 
-                if (referenceImageData.length === 0) {
+                const validReferenceData = referenceImageData.filter(item => item !== null) as { mimeType: string; base64Data: string }[];
+
+                if (validReferenceData.length === 0) {
                      throw new Error("Selected items have no data.");
                 }
 
@@ -583,28 +681,28 @@ const App: React.FC = () => {
                 if (isSingleItem && isMatchingAspectRatio) {
                     const item = editableItems[0];
                     if ('maskSrc' in item && item.maskSrc) {
-                        const { mimeType, data } = parseDataUrl(item.maskSrc);
-                        if (data) {
-                            maskPart = { mimeType, base64Data: data };
-                        }
+                        // Also optimize mask
+                        const { data: maskBase64, mimeType: maskMimeType } = await optimizeImageForApi(item.maskSrc, 1376, 0.95);
+                        maskPart = { mimeType: maskMimeType, base64Data: maskBase64 };
                     }
                 }
 
                 if (isSingleItem && isMatchingAspectRatio) {
-                    const finalImageBase64 = await editImage(ai, effectivePrompt, referenceImageData, activeModel, maskPart, aspectRatio);
+                    const finalImageBase64 = await editImage(ai, effectivePrompt, validReferenceData, currentModel, maskPart, aspectRatio);
                     const finalImgSrc = `data:image/png;base64,${finalImageBase64}`;
                     setDebugImages(prev => [...prev, { label: 'Final Result (1-Step)', src: finalImgSrc }]);
                     addImageToCanvas(finalImgSrc, 'result', { prompt, targetAspectRatio: aspectRatio });
                 } else {
-                    const initialImageBase64 = await editImage(ai, effectivePrompt, referenceImageData, activeModel, undefined, aspectRatio);
+                    const initialImageBase64 = await editImage(ai, effectivePrompt, validReferenceData, currentModel, undefined, aspectRatio);
                     const initialImageSrc = `data:image/png;base64,${initialImageBase64}`;
                     setDebugImages(prev => [...prev, { label: 'Step 1: Initial Edit', src: initialImageSrc }]);
 
                     const paddedImageSrc = await createPaddedImage(initialImageBase64, aspectRatio);
-                    const { mimeType: paddedMimeType, data: paddedData } = parseDataUrl(paddedImageSrc);
+                    // Optimize the padded image as well with high quality
+                    const { data: paddedData, mimeType: paddedMimeType } = await optimizeImageForApi(paddedImageSrc, 1376, 0.95);
                     setDebugImages(prev => [...prev, { label: 'Step 2: Padded for Outpainting', src: paddedImageSrc }]);
 
-                    const finalImageBase64 = await editImage(ai, outpaintingPrompt, [{ mimeType: paddedMimeType, base64Data: paddedData }], activeModel, undefined, aspectRatio);
+                    const finalImageBase64 = await editImage(ai, outpaintingPrompt, [{ mimeType: paddedMimeType, base64Data: paddedData }], currentModel, undefined, aspectRatio);
                     const finalImgSrc = `data:image/png;base64,${finalImageBase64}`;
 
                     setDebugImages(prev => [...prev, { label: 'Step 3: Final Result', src: finalImgSrc }]);
@@ -639,23 +737,24 @@ const App: React.FC = () => {
                             console.log(`Found entities: Character '${characterName}', Background '${backgroundName}'. Using editImage.`);
                             
                             const imagesToEdit = [characterImage, backgroundImage];
-                            const referenceImageData = imagesToEdit.map(img => {
-                                const { mimeType, data } = parseDataUrl(img.src);
+                            const referenceImageData = await Promise.all(imagesToEdit.map(async (img) => {
+                                const { data, mimeType } = await optimizeImageForApi(img.src, 1376, 0.95);
                                 return { mimeType, base64Data: data };
-                            });
+                            }));
+
                             setDebugImages(imagesToEdit.map((img, i) => ({ label: `Reference ${i + 1} (${img.name})`, src: img.src })));
                             
                             const effectivePrompt = negativePrompt ? `${finalPrompt}\n\nNegative Prompt: ${negativePrompt}` : finalPrompt;
 
-                            const initialImageBase64 = await editImage(ai, effectivePrompt, referenceImageData, activeModel, undefined, aspectRatio);
+                            const initialImageBase64 = await editImage(ai, effectivePrompt, referenceImageData, 'gemini-3-pro-image-preview', undefined, aspectRatio);
                             const initialImageSrc = `data:image/png;base64,${initialImageBase64}`;
                             setDebugImages(prev => [...prev, { label: 'Step 1: Initial Combination', src: initialImageSrc }]);
         
                             const paddedImageSrc = await createPaddedImage(initialImageBase64, aspectRatio);
-                            const { mimeType: paddedMimeType, data: paddedData } = parseDataUrl(paddedImageSrc);
+                            const { data: paddedData, mimeType: paddedMimeType } = await optimizeImageForApi(paddedImageSrc, 1376, 0.95);
                             setDebugImages(prev => [...prev, { label: 'Step 2: Padded for Outpainting', src: paddedImageSrc }]);
 
-                            const finalImageBase64 = await editImage(ai, outpaintingPrompt, [{ mimeType: paddedMimeType, base64Data: paddedData }], activeModel, undefined, aspectRatio);
+                            const finalImageBase64 = await editImage(ai, outpaintingPrompt, [{ mimeType: paddedMimeType, base64Data: paddedData }], 'gemini-3-pro-image-preview', undefined, aspectRatio);
                             const finalImgSrc = `data:image/png;base64,${finalImageBase64}`;
         
                             setDebugImages(prev => [...prev, { label: 'Step 3: Final Result', src: finalImgSrc }]);
@@ -670,9 +769,10 @@ const App: React.FC = () => {
                 }
 
                 // FALLBACK: Generate a new image from scratch
-                const base64Image = await generateImage(ai, finalPrompt, activeModel, aspectRatio);
+                // User requirement: Automatically use Imagen 4 if no image is selected (Generation mode)
+                const base64Image = await generateImage(ai, finalPrompt, currentModel, aspectRatio);
                 const imgSrc = `data:image/png;base64,${base64Image}`;
-                setDebugImages([{ label: 'Final Result', src: imgSrc }]);
+                setDebugImages([{ label: 'Final Result (Imagen 4)', src: imgSrc }]);
                 addImageToCanvas(imgSrc, 'result', { prompt, targetAspectRatio: aspectRatio });
             }
 
@@ -685,54 +785,101 @@ const App: React.FC = () => {
         } catch (error: any) {
             console.error(`Image generation/editing failed on attempt ${attempt}:`, error);
             
-            const errorString = JSON.stringify(error, Object.getOwnPropertyNames(error));
-            const rawMessage = (error.message || errorString).toLowerCase();
-            const combinedMessage = (error.message + " " + errorString).toLowerCase();
+            // CLEAN ERROR MESSAGE LOGIC
+            let cleanMessage = error.message || 'Unknown error';
+            let parsedError = null;
 
-            if (error.isTrusted === true && !error.message) {
-                 if (attempt < maxRetries) {
-                     setLoadingMessage(`네트워크 연결 불안정... 재시도 합니다 (${attempt}/${maxRetries})`);
-                     await new Promise(resolve => setTimeout(resolve, 2000));
-                     continue;
-                 }
-                 setErrorMessage("네트워크 오류가 발생했습니다. (인터넷 연결을 확인하거나 잠시 후 다시 시도해주세요)");
+            // 1. Try to parse JSON error (often hidden in stringified message or error.message)
+            try {
+                const textToParse = error.message || JSON.stringify(error);
+                const jsonMatch = textToParse.match(/{.*}/); // Find JSON-like substring
+                if (jsonMatch) {
+                    const parsed = JSON.parse(jsonMatch[0]);
+                    if (parsed.error) parsedError = parsed.error;
+                    else parsedError = parsed;
+                }
+            } catch (e) { /* ignore */ }
+
+            // 2. Direct Object Check (if error is { error: { code: 503 } })
+            if (error.error) {
+                parsedError = error.error;
+            }
+
+            // 3. Extract cleaner message from parsed error if available
+            if (parsedError && parsedError.message) {
+                cleanMessage = parsedError.message;
+            }
+
+            // 4. Sanitize Stack Trace (Remove Base64 junk)
+            const rawStack = error.stack || '';
+            const sanitizedStack = rawStack.replace(/data:image\/[^;]+;base64,[a-zA-Z0-9+/=]+/g, '<BASE64_IMAGE_DATA_REMOVED>');
+            
+            // 5. Construct Readable Detailed Error
+            const fullErrorDetails = `Reason: ${cleanMessage}\n\nTechnical Details:\n${sanitizedStack}`;
+            setDetailedError(fullErrorDetails);
+
+            // ERROR CLASSIFICATION
+            const rawString = JSON.stringify(error).toLowerCase();
+            const msgLower = cleanMessage.toLowerCase();
+
+            // CRITICAL FIX: Stop retrying immediately if blocked by safety filters or client errors
+            if (msgLower.includes("safety_block") || msgLower.includes("blocked") || msgLower.includes("prohibited") || msgLower.includes("recitation")) {
+                setErrorMessage("안전 정책 또는 금지된 콘텐츠로 인해 이미지가 차단되었습니다. 프롬프트를 수정해주세요.");
+                setIsLoading(false);
+                setLoadingMessage(null);
+                return; 
+            }
+
+            if (msgLower.includes("400") || msgLower.includes("invalid_argument") || msgLower.includes("payload") || msgLower.includes("too large")) {
+                 setErrorMessage("이미지 데이터가 너무 큽니다. 입력 이미지를 줄이거나 더 간단한 프롬프트로 시도해주세요.");
                  setIsLoading(false);
                  setLoadingMessage(null);
-                 return; 
+                 return;
             }
 
-            if (combinedMessage.includes("freetier") || combinedMessage.includes("free_tier")) {
-                 console.warn("Free Tier quota signal detected, but proceeding with retry as per user request.");
-            }
+            // CHECK FOR 503 OVERLOAD (Robust Detection)
+            const is503 = 
+                (parsedError && (parsedError.code === 503 || parsedError.status === "UNAVAILABLE")) ||
+                msgLower.includes('503') || 
+                msgLower.includes('overloaded') || 
+                msgLower.includes('unavailable') ||
+                rawString.includes('"code":503');
 
-            if (rawMessage.includes("429") || rawMessage.includes("resource_exhausted") || rawMessage.includes("quota")) {
-                if (attempt < maxRetries) {
-                    let delay = 3500;
-                    const retryMatch = rawMessage.match(/retry in ([0-9.]+)s/);
-                    if (retryMatch) {
-                        delay = Math.min((parseFloat(retryMatch[1]) * 1000) + 1000, 5000); 
-                    } else {
-                         delay = 3000; 
-                    }
-
-                    setLoadingMessage(`사용량 초과로 잠시 대기 중... (${attempt}/${maxRetries})`);
-                    await new Promise(resolve => setTimeout(resolve, delay));
-                    continue; // Retry loop
-                }
-            }
+            const is429 = 
+                (parsedError && (parsedError.code === 429 || parsedError.status === "RESOURCE_EXHAUSTED")) ||
+                msgLower.includes('429') || 
+                msgLower.includes('quota') ||
+                msgLower.includes('resource_exhausted');
 
             if (attempt < maxRetries) {
-                const isTimeout = rawMessage.includes('503') || rawMessage.includes('timed out');
-                const message = isTimeout 
-                    ? `모델 응답 지연 중... 재시도 합니다 (${attempt}/${maxRetries})` 
-                    : `오류가 발생하여 재시도 중입니다 (${attempt}/${maxRetries})`;
+                let delay = 3000;
+                let message = "";
+
+                if (is503) {
+                    // Quick Backoff for 503: 1s, 2s, 4s
+                    delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000); 
+                    message = `⚠️ 서버 과부하 (503). ${Math.round(delay/1000)}초 후 자동 재시도합니다... (${attempt}/${maxRetries})`;
+                } else if (is429) {
+                    delay = 5000;
+                    message = `⏳ 사용량 한도 도달. 잠시 대기 중... (${attempt}/${maxRetries})`;
+                } else {
+                    delay = 2000;
+                    message = `오류 발생. 재시도 중... (${attempt}/${maxRetries})`;
+                }
                 
+                console.log(`Retry attempt ${attempt}: ${message}`);
                 setLoadingMessage(message);
-                const delay = 3000;
                 await new Promise(resolve => setTimeout(resolve, delay));
+                continue; // Explicit continue
             } else {
                 console.error("Image generation/editing failed after all retries.");
-                setErrorMessage("생성을 실패하였습니다. 잠시 후 다시 시도해주세요. (오류가 지속되면 콘솔을 확인하세요)");
+                if (is503) {
+                    setErrorMessage("Google 서버가 현재 매우 혼잡합니다 (503 Overloaded). 잠시 후 다시 시도해주세요.");
+                } else if (is429) {
+                    setErrorMessage("API 사용량이 초과되었습니다 (429 Quota Exceeded). 잠시 후 다시 시도하거나 다른 계정을 사용하세요.");
+                } else {
+                    setErrorMessage("생성을 실패하였습니다. 문제가 지속되면 콘솔의 상세 에러를 확인하세요.");
+                }
                 setIsLoading(false);
                 setLoadingMessage(null);
             }
@@ -1344,7 +1491,7 @@ const App: React.FC = () => {
           }`}
         >
           <span>Pro 3</span>
-          <span className="text-[10px] font-normal opacity-80">Quality</span>
+          <span className="text-[10px] font-normal opacity-80">Smart</span>
         </button>
       </div>
 
@@ -1425,6 +1572,7 @@ const App: React.FC = () => {
         isLoading={isLoading} 
         loadingMessage={loadingMessage}
         errorMessage={errorMessage}
+        detailedError={detailedError}
         aspectRatio={aspectRatio}
         onAspectRatioChange={setAspectRatio}
         onFocusChange={setIsInputFocused}

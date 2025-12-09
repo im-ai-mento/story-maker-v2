@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { GoogleGenAI } from '@google/genai';
 import { editImage } from '../services/geminiService';
@@ -15,7 +14,11 @@ interface CharacterDetailViewProps {
 
 const parseDataUrl = (dataUrl: string): { mimeType: string; data: string } => {
     const parts = dataUrl.split(',');
-    const mimeType = parts[0].match(/:(.*?);/)?.[1] || 'image/png';
+    let mimeType = parts[0].match(/:(.*?);/)?.[1] || 'image/png';
+    // Fix for "Unsupported MIME type: application/octet-stream"
+    if (mimeType === 'application/octet-stream' || mimeType === 'binary/octet-stream') {
+        mimeType = 'image/png';
+    }
     const data = parts[1];
     return { mimeType, data };
 };

@@ -46,13 +46,17 @@ export const generateImage = async (
 ): Promise<string> => {
     try {
         if (model.includes('gemini') || model.includes('flash') || model.includes('pro-image')) {
+            // OPTIMIZATION: Removed systemInstruction. 
+            // Sending system instructions to image models increases processing load and can lead to 503 errors 
+            // or unexpected text responses instead of images.
             const response = await ai.models.generateContent({
                 model: model,
                 contents: { parts: [{ text: prompt }] },
                 config: {
                     ...(aspectRatio && { 
                         imageConfig: { 
-                            aspectRatio: aspectRatio 
+                            aspectRatio: aspectRatio,
+                            // REMOVED explicit imageSize constraint. Let the model decide the best resolution.
                         } 
                     }),
                     safetySettings,
@@ -60,6 +64,21 @@ export const generateImage = async (
             });
 
             const candidate = response.candidates?.[0];
+            
+            // Check for Safety Block explicitly
+            if (candidate?.finishReason === 'SAFETY') {
+                throw new Error("SAFETY_BLOCK: The request was blocked by safety filters.");
+            }
+            if (candidate?.finishReason === 'PROHIBITED_CONTENT') {
+                throw new Error("PROHIBITED_CONTENT: The request was blocked because it contains prohibited content.");
+            }
+            if (candidate?.finishReason === 'BLOCKLIST') {
+                throw new Error("BLOCKLIST: The request was blocked by blocklist.");
+            }
+            if (candidate?.finishReason === 'RECITATION') {
+                 throw new Error("RECITATION: The request was blocked due to recitation.");
+            }
+
             if (candidate?.content?.parts) {
                 for (const part of candidate.content.parts) {
                     if (part.inlineData) {
@@ -68,12 +87,15 @@ export const generateImage = async (
                 }
             }
              console.error("API response did not contain an image. Full response:", JSON.stringify(response, null, 2));
-             throw new Error("No image generated from Gemini model.");
+             throw new Error("No image generated. The model might have returned text instead of an image, or the content was filtered.");
 
         } else {
+            // Imagen models don't support systemInstruction in the same way, so we enhance the prompt.
+            const enhancedPrompt = `${prompt} . Photorealistic, 8k, highly detailed, professional photography, natural lighting.`;
+            
             const response = await ai.models.generateImages({
                 model: 'imagen-4.0-generate-001',
-                prompt: prompt,
+                prompt: enhancedPrompt,
                 config: {
                     numberOfImages: 1,
                     outputMimeType: 'image/png',
@@ -130,13 +152,15 @@ export const editImage = async (
             });
         }
 
+        // OPTIMIZATION: Removed systemInstruction for editing as well.
         const response = await ai.models.generateContent({
             model: model,
             contents: { parts },
             config: {
                 ...(aspectRatio && { 
                     imageConfig: { 
-                        aspectRatio: aspectRatio 
+                        aspectRatio: aspectRatio,
+                        // REMOVED explicit imageSize constraint. Let the model decide the best resolution.
                     } 
                 }),
                 safetySettings,
@@ -144,6 +168,20 @@ export const editImage = async (
         });
         
         const candidate = response.candidates?.[0];
+
+        // Check for Safety Block explicitly
+        if (candidate?.finishReason === 'SAFETY') {
+            throw new Error("SAFETY_BLOCK: The request was blocked by safety filters.");
+        }
+        if (candidate?.finishReason === 'PROHIBITED_CONTENT') {
+            throw new Error("PROHIBITED_CONTENT: The request was blocked because it contains prohibited content.");
+        }
+        if (candidate?.finishReason === 'BLOCKLIST') {
+            throw new Error("BLOCKLIST: The request was blocked by blocklist.");
+        }
+        if (candidate?.finishReason === 'RECITATION') {
+             throw new Error("RECITATION: The request was blocked due to recitation.");
+        }
 
         if (candidate?.content?.parts) {
             for (const part of candidate.content.parts) {
@@ -154,7 +192,7 @@ export const editImage = async (
         }
         
         console.error("API response did not contain an image or was blocked. Full response:", JSON.stringify(response, null, 2));
-        throw new Error("No edited image was returned from the API. This might be due to safety filters.");
+        throw new Error("No edited image was returned from the API. The model might have been blocked or returned text.");
 
     } catch (error) {
         console.error("Error calling Gemini API for image editing:", error);
@@ -271,63 +309,28 @@ export const generateVideo = async (
                          pollRetryCount++;
                          console.log(`Polling failed, retrying (${pollRetryCount}/${maxPollRetries})...`);
                          await new Promise(r => setTimeout(r, 5000));
-                    } else {
-                        throw pollError;
+                         continue;
                     }
+                    throw pollError;
                 }
             }
         }
-    } catch (pollError) {
-        console.error("Error during video polling:", pollError);
-        throw pollError;
+    } catch (error) {
+         console.error("Video polling failed:", error);
+         throw error;
     }
 
-    if (operation.error) {
-        const errorMsg = operation.error.message || "Unknown server error";
-        const errorCode = operation.error.code || "UNKNOWN";
-        const err = new Error(`Video generation failed: ${errorMsg} (Code: ${errorCode})`);
-        (err as any).originalError = operation.error;
-        throw err;
+    const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
+    if (!downloadLink) {
+         throw new Error("Video generation completed but no download link found.");
     }
-
-    const videoUri = operation.response?.generatedVideos?.[0]?.video?.uri;
-    if (!videoUri) {
-        console.error("Operation finished without URI. Full op:", JSON.stringify(operation, null, 2));
-        throw new Error("Video generation completed but no URI was returned.");
-    }
-
-    const cleanApiKey = apiKey.trim();
-    let response;
-
-    try {
-        response = await fetch(videoUri, { referrerPolicy: 'no-referrer' });
-    } catch (e) {
-        console.warn("Raw fetch failed, trying with key...");
-        response = { ok: false, status: 0 } as Response;
-    }
-
-    if (!response.ok) {
-         if (response.status === 403 || response.status === 401 || response.status === 0) {
-            const separator = videoUri.includes('?') ? '&' : '?';
-            const authUrl = `${videoUri}${separator}key=${cleanApiKey}`;
-            
-            response = await fetch(authUrl, { referrerPolicy: 'no-referrer' });
-         }
-    }
-
+    
+    // Fetch the video bytes using the API Key
+    const response = await fetch(`${downloadLink}&key=${apiKey}`);
     if (!response.ok) {
         throw new Error(`Failed to download generated video. Status: ${response.status}`);
     }
-
-    const blob = await response.blob();
     
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-            const base64data = reader.result as string;
-            resolve(base64data);
-        };
-        reader.onerror = reject;
-        reader.readAsDataURL(blob);
-    });
+    const blob = await response.blob();
+    return URL.createObjectURL(blob);
 };
